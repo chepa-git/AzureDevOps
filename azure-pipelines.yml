@@ -21,3 +21,7 @@ steps:
     --parallel 5 \
     --result-label "AzureDevops Build:  $(Date:yyyyMMdd).$(Rev:r)" \
     --turbo-mode
+- task: PublishTestResults@2
+  inputs:
+    testResultsFormat: 'JUnit'
+    testResultsFiles: '**/testim-report.xml'
