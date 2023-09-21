@@ -13,12 +13,12 @@ steps:
     testim \
     --token $(TestimToken) \
     --project $(TestimProject) \
-    --grid "TESTIM-HA-GRID" \
+    --grid "tricentis-device-cloud" \
     --report-file testim-tests-report.xml \
     --test-plan "AzureDevops" \
     --mode selenium \
     --report-file "testim-report.xml" \
-    --parallel 5 \
+    --parallel 3 \
     --result-label "AzureDevops Build:  $(Date:yyyyMMdd).$(Rev:r)" \
     --turbo-mode
 - task: PublishTestResults@2
