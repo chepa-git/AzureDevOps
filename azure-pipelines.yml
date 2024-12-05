@@ -13,7 +13,7 @@ steps:
     testim \
     --token $(TestimToken) \
     --project $(TestimProject) \
-    --grid "tricentis-device-cloud" \
+    --grid "Testim-Grid" \
     --report-file testim-tests-report.xml \
     --test-plan "AzureDevops" \
     --report-file "testim-report.xml" \
