@@ -16,7 +16,6 @@ steps:
     --grid "tricentis-device-cloud" \
     --report-file testim-tests-report.xml \
     --test-plan "AzureDevops" \
-    --mode selenium \
     --report-file "testim-report.xml" \
     --parallel 3 \
     --result-label "AzureDevops Build:  $(Date:yyyyMMdd).$(Rev:r)" \
