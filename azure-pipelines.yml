@@ -18,7 +18,6 @@ steps:
     --test-plan "Cross Browser" \
     --report-file "testim-report.xml" \
     --parallel 3 \
-    --result-label "AzureDevops Build:  $(Date:yyyyMMdd).$(Rev:r)" \
     --turbo-mode
 - task: PublishTestResults@2
   inputs:
