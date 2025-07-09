@@ -15,7 +15,7 @@ steps:
     --project $(TestimProject) \
     --grid "Testim-Grid" \
     --report-file testim-tests-report.xml \
-    --test-plan "AzureDevops" \
+    --test-plan "Cross Browser" \
     --report-file "testim-report.xml" \
     --parallel 3 \
     --result-label "AzureDevops Build:  $(Date:yyyyMMdd).$(Rev:r)" \
