@@ -1,25 +1,23 @@
 steps:
-- task:  NodeTool@0
+- task: NodeTool@0
   inputs:
     versionSpec: '24.x'
+    # You can also change 'lts' to any supported LTS Node.js version.
   displayName: 'Install Node.js'
+
 - script: |
     npm install -g @testim/testim-cli
-  
-  displayName: 'npm install testim-cli'
-- script: |
-    myBuildNum=$(echo $(Build.BuildNumber) | sed -e 's/^.*\(.\)$/\1/')
-    echo "Build Number is : "  $myBuildNum
     testim \
-    --token $(TestimToken) \
-    --project $(TestimProject) \
+    --token "FhWpoM5ezR5kvXYN4BgDkHkj5ijEXmjuUnugYYapkPxgkYkeKY" \
+    --project "yUHggaUM53fuXM0PejOu" \
     --grid "Testim-Grid" \
-    --report-file testim-tests-report.xml \
-    --test-plan "Cross Browser" \
-    --report-file "testim-report.xml" \
-    --parallel 3 \
-    --turbo-mode
+    --branch "master" \
+    --label "azureDevOps" \
+    --report-file testim-tests-report.xml
+  displayName: 'npm install testim-cli and run tests'
+
 - task: PublishTestResults@2
+  displayName: 'publish testim test results'
   inputs:
     testResultsFormat: 'JUnit'
-    testResultsFiles: 'testim-report.xml'
+    testResultsFiles: '**/testim-tests-report.xml'
