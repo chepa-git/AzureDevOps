@@ -14,7 +14,7 @@ steps:
     --branch "master" \
     --label "azureDevOps" \
     --report-file testim-tests-report.xml
-  displayName: 'npm install testim-cli and run tests'
+ 
 
 - task: PublishTestResults@2
   displayName: 'publish testim test results'
