@@ -15,8 +15,9 @@ jobs:
         shell: pwsh
         env:
           # Mapping GitHub Secrets to Environment Variables
-          CLIENT_ID: ${{ secrets.TRICENTIS_CLIENT_ID }}
-          CLIENT_SECRET: ${{ secrets.TRICENTIS_CLIENT_SECRET }}
+          CLIENT_ID: "Tricentis_Cloud_API"
+          CLIENT_SECRET: "qWofWKsmVxN_Cpp2nVxdiBIBO2-f49IEA2hubs3mQiNUWpnrTrTdG0Ferj74JZR0"
+
         run: |
           ############################################
           # CONFIG (Using GitHub Env Variables)
