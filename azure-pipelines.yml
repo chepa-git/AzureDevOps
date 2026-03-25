@@ -1,22 +1,126 @@
-steps:
-- task: NodeTool@0
-  inputs:
-    versionSpec: '23.x'
-    # You can also change 'lts' to any supported LTS Node.js version.
-  displayName: 'Install Node.js'
+name: Tricentis Tosca Execution
 
-- script: |
-    npm install -g @testim/testim-cli
-    testim \
-    --token "FhWpoM5ezR5kvXYN4BgDkHkj5ijEXmjuUnugYYapkPxgkYkeKY" \
-    --project "yUHggaUM53fuXM0PejOu" \
-    --grid "Testim-Grid" \
-    --label "azureDevOps" \
-    --report-file testim-tests-report.xml
-  displayName: 'npm install testim-cli and run tests'
+on:
+  workflow_dispatch: # Allows you to run it manually from the Actions tab
 
-- task: PublishTestResults@2
-  displayName: 'publish testim test results'
-  inputs:
-    testResultsFormat: 'JUnit'
-    testResultsFiles: '**/testim-tests-report.xml'
+jobs:
+  run-tosca-test:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Execute PowerShell Script
+        shell: pwsh
+        env:
+          # Mapping GitHub Secrets to Environment Variables
+          CLIENT_ID: ${{ secrets.TRICENTIS_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.TRICENTIS_CLIENT_SECRET }}
+        run: |
+          ############################################
+          # CONFIG (Using GitHub Env Variables)
+          ############################################
+          $CLIENT_ID     = $env:CLIENT_ID
+          $CLIENT_SECRET = $env:CLIENT_SECRET
+          $E2G_SCOPE     = "tta"
+          $E2G_AUTH_URL  = "https://presales.okta.com/oauth2/default/v1/token"
+          $TOSCA_CLOUD_URL = "https://presales.my.tricentis.com/94fdbfd3-30fd-4487-bbf1-414a26c598a6"
+          $PLAYLIST_ID   = "d178d698-e915-49cc-b13f-cfc5589ca30a"
+
+          ############################################
+          # GET ACCESS TOKEN
+          ############################################
+          Write-Host "=== TOKEN ACQUISITION ==="
+          $headers = @{ "Content-Type" = "application/x-www-form-urlencoded" }
+          $body = "client_id=$CLIENT_ID&client_secret=$CLIENT_SECRET&scope=$E2G_SCOPE&grant_type=client_credentials"
+          
+          $maxRetries = 3
+          $retryCount = 0
+          $success = $false
+          do {
+              try {
+                  $response = Invoke-RestMethod -Uri $E2G_AUTH_URL -Method Post -Headers $headers -Body $body
+                  $accessToken = $response.access_token
+                  $success = $true
+                  Write-Host "Token acquired successfully"
+              }
+              catch {
+                  $retryCount++
+                  Write-Host "Token attempt $retryCount failed: $($_.Exception.Message)"
+                  Start-Sleep -Seconds 5
+              }
+          } while (-not $success -and $retryCount -lt $maxRetries)
+
+          if (-not $success) { throw "Failed to acquire token" }
+
+          ############################################
+          # START PLAYLIST EXECUTION
+          ############################################
+          Write-Host "=== STARTING PLAYLIST ==="
+          $headers = @{
+              "Authorization" = "Bearer $accessToken"
+              "Content-Type"  = "application/json"
+              "Accept"        = "application/json"
+          }
+          $body = @{ playlistId = $PLAYLIST_ID; private = $false } | ConvertTo-Json
+          $runUrl = "$TOSCA_CLOUD_URL/_playlists/api/v2/playlistRuns/"
+          $response = Invoke-RestMethod -Uri $runUrl -Method Post -Headers $headers -Body $body
+          
+          $executionId = if ($response.executionId) { $response.executionId } else { $response.id }
+          if (-not $executionId) { throw "No execution ID returned" }
+          Write-Host "Execution ID: $executionId"
+
+          ############################################
+          # WAIT FOR EXECUTION TO FINISH
+          ############################################
+          Write-Host "=== WAITING FOR EXECUTION ==="
+          $timeoutMinutes = 120
+          $pollInterval   = 30
+          $timeoutTime    = (Get-Date).AddMinutes($timeoutMinutes)
+
+          do {
+              $statusUrl = "$TOSCA_CLOUD_URL/_playlists/api/v2/playlistRuns/$executionId"
+              $statusResponse = Invoke-RestMethod -Uri $statusUrl -Method Get -Headers $headers
+              $status = $statusResponse.state
+              Write-Host "Current state: $status"
+
+              if ($status -in @("Completed","Succeeded")) { break }
+              if ($status -eq "Failed") { throw "Execution failed" }
+              if ($status -in @("Canceled","Cancelled","Canceling")) { throw "Execution canceled" }
+              if ((Get-Date) -gt $timeoutTime) { throw "Execution timed out" }
+              
+              Start-Sleep -Seconds $pollInterval
+          } while ($true)
+
+          ############################################
+          # GET JUNIT RESULTS
+          ############################################
+          Write-Host "=== FETCHING JUNIT RESULTS ==="
+          $junitHeaders = @{ "Authorization" = "Bearer $accessToken"; "Accept" = "application/xml" }
+          $junitUrl = "$TOSCA_CLOUD_URL/_playlists/api/v2/playlistRuns/$executionId/junit"
+          $junitResponse = Invoke-RestMethod -Uri $junitUrl -Method Get -Headers $junitHeaders
+          
+          # GitHub Actions works best with UTF8 without BOM
+          $junitResponse.OuterXml | Out-File "junit-results.xml" -Encoding utf8
+
+          ############################################
+          # PARSE AND FAIL PIPELINE IF NEEDED
+          ############################################
+          [xml]$xmlDoc = $junitResponse.OuterXml
+          $testsuites = $xmlDoc.testsuites
+          Write-Host "=== JUNIT SUMMARY ==="
+          Write-Host "Tests: $($testsuites.tests) | Failures: $($testsuites.failures)"
+
+          if ([int]$testsuites.failures -gt 0 -or [int]$testsuites.errors -gt 0) {
+              Write-Error "JUnit failures detected"
+              exit 1
+          }
+          Write-Host "=== PIPELINE COMPLETED SUCCESSFULLY ==="
+
+      - name: Upload Test Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tosca-junit-report
+          path: junit-results.xml
