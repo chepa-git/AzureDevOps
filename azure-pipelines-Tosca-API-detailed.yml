@@ -7,34 +7,22 @@
 # ============================================================================
 
 # Manual/other-trigger only: no CI trigger on commits or PRs.
-# Kick this off manually, from a schedule, or from another pipeline.
-# Change to a branch list (e.g. "- main") if you want it to run on push.
-
 trigger:
 - none
 
 # ----------------------------------------------------------------------------
-# Connection values come from the pipeline UI (or a variable group) and are
-# referenced directly below. Expected variables:
+# Expected pipeline variables (set in the pipeline UI):
 #   ToscaBaseUrl        - full API base URL, e.g. https://presales.my.tricentis.com
 #   ToscaAuthURL        - full OAuth token endpoint (Okta)
 #   ToscaClientId       - OAuth client id
 #   ToscaClientSecret   - OAuth client secret  (MUST be a SECRET variable)
 #   ToscaWorkspaceID    - workspace/space GUID (used in API paths)
 #   ToscaWorkspaceName  - workspace/space display name (used in portal deep-links)
-# If they live in a variable group, add it here (the list form below is
-# required once a "- group:" entry is present):
-#   - group: <your-variable-group-name>
-#
-# The values below are pipeline-specific (not connection config), so they live
-# in the YAML rather than the UI.
 # ----------------------------------------------------------------------------
 variables:
   - name: toscaPlaylistName
     value: Adhoc Regression
-  # Per-build results path. Agent.TempDirectory is wiped at the start of each
-  # job, so a failed run can't republish a previous build's results.xml and
-  # concurrent builds on this agent won't collide. Expanded at job runtime.
+  # Per-build results path (Agent.TempDirectory is wiped at the start of each job).
   - name: toscaResultsFile
     value: $(Agent.TempDirectory)\ToscaResults\results.xml
 
@@ -45,12 +33,10 @@ stages:
   jobs:
     - job: Test
 
-      # Bound the whole job just above the script's own 2h MaxPollingTimeout so
-      # the script's timeout+cancel logic fires first.
+      # Just above the script's own 2h MaxPollingTimeout so it can self-cancel first.
       timeoutInMinutes: 135
 
-      # Microsoft-hosted Windows agent. It must be able to reach the Tosca
-      # tenant, the Okta token URL and Azure DevOps (for attachment REST calls).
+      # Microsoft-hosted Windows agent.
       pool:
         vmImage: 'windows-latest'
 
@@ -62,9 +48,8 @@ stages:
 
       # -------------------------------------------------------------------
       # Execute the Tosca Cloud playlist.
-      # The client secret is passed via env (TOSCA_CLIENT_SECRET), not on the
-      # command line. This task exits non-zero if the run doesn't succeed,
-      # which is why every later task uses condition: always().
+      # Secret is passed via env, not on the command line. This task exits
+      # non-zero if the run doesn't succeed, so later tasks use always().
       # -------------------------------------------------------------------
       - task: PowerShell@2
         displayName: 'Execute Tosca Cloud Playlist and Retrieve Results'
@@ -88,25 +73,32 @@ stages:
             -JUnitResultsFile "$(toscaResultsFile)"
 
       # -------------------------------------------------------------------
-      # Copy the <failure> message attribute into the element body so the
-      # Tests tab (Debug > Error message) shows it. Must run BEFORE
-      # PublishTestResults, which reads the file.
+      # Rebuild each <failure> so the message is both an attribute and the
+      # element body (CDATA), then print the file for verification.
+      # Must run BEFORE PublishTestResults, which reads the file.
       # -------------------------------------------------------------------
       - powershell: |
           $f = "$(toscaResultsFile)"
           if (Test-Path $f) {
-            [xml]$x = Get-Content $f
-            foreach ($fl in $x.SelectNodes('//failure')) {
-              if (-not $fl.InnerText) { $fl.InnerText = $fl.GetAttribute('message') }
+            [xml]$x = Get-Content $f -Raw
+            foreach ($fl in @($x.SelectNodes('//failure'))) {
+              $msg = $fl.GetAttribute('message')
+              $fl.RemoveAll()
+              $fl.SetAttribute('message', $msg)
+              $fl.SetAttribute('type', 'AssertionError')
+              [void]$fl.AppendChild($x.CreateCDataSection($msg))
             }
             $x.Save($f)
+            Write-Host "---- JUnit after edit ----"
+            Get-Content $f
+          } else {
+            Write-Host "File not found: $f"
           }
         displayName: 'Add failure text to JUnit'
         condition: always()
 
       # -------------------------------------------------------------------
       # Publish results to the run's Tests tab.
-      # always() so failures are still published (that's when you need them).
       # -------------------------------------------------------------------
       - task: PublishTestResults@2
         displayName: 'Publish Test Results'
@@ -116,9 +108,8 @@ stages:
           testResultsFormat: 'JUnit'
 
       # -------------------------------------------------------------------
-      # Enrich failed tests with step-level HTML and attach to results.
-      # SYSTEM_ACCESSTOKEN is required to attach files to test results (the
-      # build service identity also needs permission to manage test runs).
+      # Attach step-level HTML detail to failed tests.
+      # SYSTEM_ACCESSTOKEN is required to attach files to test results.
       # -------------------------------------------------------------------
       - task: PowerShell@2
         displayName: 'Attach step-level detail to failed tests'
@@ -140,9 +131,8 @@ stages:
             -AttachToTestResults $true
 
       # -------------------------------------------------------------------
-      # Publish the rendered reports as a downloadable pipeline artifact.
-      # continueOnError so a missing folder (e.g. no failures) is a warning,
-      # not a failure that hides the real error.
+      # Publish the rendered reports as a pipeline artifact. continueOnError
+      # so a missing folder is a warning, not a failure.
       # -------------------------------------------------------------------
       - task: PublishPipelineArtifact@1
         displayName: 'Publish step-detail reports'
