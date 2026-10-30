@@ -2,7 +2,8 @@
 # Tosca Cloud Playlist execution pipeline
 # ----------------------------------------------------------------------------
 # Triggers a Tosca Cloud playlist run, waits for it to finish, publishes the
-# results to the Tests tab, and attaches step-level HTML detail to any failures.
+# results to the Tests tab, and attaches step-level HTML detail, error message
+# and stack trace to any failures.
 # Docs: https://aka.ms/yaml
 # ============================================================================
 
@@ -73,31 +74,6 @@ stages:
             -JUnitResultsFile "$(toscaResultsFile)"
 
       # -------------------------------------------------------------------
-      # Rebuild each <failure> so the message is both an attribute and the
-      # element body (CDATA), then print the file for verification.
-      # Must run BEFORE PublishTestResults, which reads the file.
-      # -------------------------------------------------------------------
-      - powershell: |
-          $f = "$(toscaResultsFile)"
-          if (Test-Path $f) {
-            [xml]$x = Get-Content $f -Raw
-            foreach ($fl in @($x.SelectNodes('//failure'))) {
-              $msg = $fl.GetAttribute('message')
-              $fl.RemoveAll()
-              $fl.SetAttribute('message', $msg)
-              $fl.SetAttribute('type', 'AssertionError')
-              [void]$fl.AppendChild($x.CreateCDataSection($msg))
-            }
-            $x.Save($f)
-            Write-Host "---- JUnit after edit ----"
-            Get-Content $f
-          } else {
-            Write-Host "File not found: $f"
-          }
-        displayName: 'Add failure text to JUnit'
-        condition: always()
-
-      # -------------------------------------------------------------------
       # Publish results to the run's Tests tab.
       # -------------------------------------------------------------------
       - task: PublishTestResults@2
@@ -108,8 +84,9 @@ stages:
           testResultsFormat: 'JUnit'
 
       # -------------------------------------------------------------------
-      # Attach step-level HTML detail to failed tests.
-      # SYSTEM_ACCESSTOKEN is required to attach files to test results.
+      # Attach step-level HTML detail to failed tests and fill their
+      # Debug > Error message / Stack trace.
+      # SYSTEM_ACCESSTOKEN is required to update test results.
       # -------------------------------------------------------------------
       - task: PowerShell@2
         displayName: 'Attach step-level detail to failed tests'
@@ -132,7 +109,7 @@ stages:
 
       # -------------------------------------------------------------------
       # Publish the rendered reports as a pipeline artifact. continueOnError
-      # so a missing folder is a warning, not a failure.
+      # so a missing folder (no failures) is a warning, not a failure.
       # -------------------------------------------------------------------
       - task: PublishPipelineArtifact@1
         displayName: 'Publish step-detail reports'
