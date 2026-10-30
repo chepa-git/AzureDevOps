@@ -22,7 +22,7 @@ stages:
       # Above the script's 2h MaxPollingTimeout so it can self-cancel first.
       timeoutInMinutes: 135
       pool:
-        name: Default
+        vmImage: 'windows-latest'
       steps:
       - script: echo Test
         displayName: 'Prepare Testing'
