@@ -1,0 +1,49 @@
+name: GitHub Actions Tosca Cloud Integration
+run-name: ${{ github.actor }} is Running Tosca Tests 🚀
+
+on:
+  workflow_dispatch:
+
+jobs:
+  Tosca_Cloud_Execution:
+    runs-on: [self-hosted, windows]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Execute Tosca Cloud Playlist
+        shell: PowerShell
+        env:
+          TOSCA_AUTH_URL: ${{ secrets.TOSCA_AUTH_URL }}
+          TOSCA_CLIENT_ID: ${{ secrets.TOSCA_CLIENT_ID }}
+          TOSCA_CLIENT_SECRET: ${{ secrets.TOSCA_CLIENT_SECRET }}
+          TOSCA_TENANT: ${{ secrets.TOSCA_TENANT }}
+          TOSCA_WORKSPACE_ID: ${{ secrets.TOSCA_WORKSPACE_ID }}
+        run: >
+          ./tosca_cloud_execution_client.ps1
+          -BaseUrl "https://$env:TOSCA_TENANT.my.tricentis.com"
+          -ClientId "$env:TOSCA_CLIENT_ID"
+          -ClientSecret "$env:TOSCA_CLIENT_SECRET"
+          -TokenUrl "$env:TOSCA_AUTH_URL"
+          -SpaceId "$env:TOSCA_WORKSPACE_ID"
+          -PlaylistName "Smoke"
+          -StartNewRun
+          -MonitorRun
+          -RetrieveResults
+          -JUnitResultsFile "C:\Tricentis\Tosca\Results\results.xml"
+
+      - name: Copy JUnit results into workspace
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path test-results | Out-Null
+          Copy-Item "C:\Tricentis\Tosca\Results\results.xml" "test-results/results.xml" -ErrorAction SilentlyContinue
+
+      - name: Upload JUnit Results Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tosca-junit-results
+          path: test-results/results.xml
+          if-no-files-found: warn
