@@ -59,7 +59,7 @@ stages:
       # attachment REST calls), and the blob host the step JSON is served from.
 
       pool:
-        name: Default
+        vmImage: 'windows-latest'
       steps:
 
       # -------------------------------------------------------------------
