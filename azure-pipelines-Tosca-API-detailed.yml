@@ -6,7 +6,7 @@
 # Docs: https://aka.ms/yaml
 # ============================================================================
 
-# This example leverages a Manual/other-trigger only: no CI trigger on commits or PRs.
+# Manual/other-trigger only: no CI trigger on commits or PRs.
 # Kick this off manually, from a schedule, or from another pipeline.
 # Change to a branch list (e.g. "- main") if you want it to run on push.
 
@@ -16,7 +16,7 @@ trigger:
 # ----------------------------------------------------------------------------
 # Connection values come from the pipeline UI (or a variable group) and are
 # referenced directly below. Expected variables:
-#   ToscaBaseUrl        - full API base URL, e.g. https://amspresales.my.tricentis.com
+#   ToscaBaseUrl        - full API base URL, e.g. https://presales.my.tricentis.com
 #   ToscaAuthURL        - full OAuth token endpoint (Okta)
 #   ToscaClientId       - OAuth client id
 #   ToscaClientSecret   - OAuth client secret  (MUST be a SECRET variable)
@@ -38,9 +38,6 @@ variables:
   - name: toscaResultsFile
     value: $(Agent.TempDirectory)\ToscaResults\results.xml
 
-# Single stage that holds the whole test workflow. Add more stages
-# (Deploy, etc.) later if this becomes part of a larger release.
-
 stages:
 
 - stage: Test
@@ -49,37 +46,26 @@ stages:
     - job: Test
 
       # Bound the whole job just above the script's own 2h MaxPollingTimeout so
-      # the script's timeout+cancel logic fires first, instead of ADO killing
-      # the job mid-poll and leaving an orphaned server-side run. Self-hosted
-      # jobs otherwise have no time limit.
+      # the script's timeout+cancel logic fires first.
       timeoutInMinutes: 135
 
-      # Runs on your self-hosted "Default" agent pool. This agent must be able
-      # to reach the Tosca tenant, the Okta token URL, Azure DevOps (for the
-      # attachment REST calls), and the blob host the step JSON is served from.
-
+      # Microsoft-hosted Windows agent. It must be able to reach the Tosca
+      # tenant, the Okta token URL and Azure DevOps (for attachment REST calls).
       pool:
         vmImage: 'windows-latest'
+
       steps:
 
-      # -------------------------------------------------------------------
-      # Warm-up / sanity step. Confirms the agent and job are alive before
-      # the real work starts. Safe to remove; handy as a log marker.
-      # -------------------------------------------------------------------
+      # Warm-up / sanity step. Safe to remove.
       - script: echo Test
         displayName: 'Prepare Testing'
 
       # -------------------------------------------------------------------
       # Execute the Tosca Cloud playlist.
-      # Authenticates (client credentials), resolves the playlist by name, starts a run, polls until it finishes, and writes JUnit results.
-      #   -StartNewRun / -MonitorRun / -RetrieveResults drive the phases.
-      #   -PollingInterval / -MaxPollingTimeout bound the wait (here: poll every 10s, give up after 2h).
-      #   -CancelOnTimeout cancels the server-side run if monitoring times out.
       # The client secret is passed via env (TOSCA_CLIENT_SECRET), not on the
-      # command line; the script reads it as the default for -ClientSecret.
-      # This task exits non-zero if the run doesn't succeed, which fails the job - the reason every later task uses condition: always().
+      # command line. This task exits non-zero if the run doesn't succeed,
+      # which is why every later task uses condition: always().
       # -------------------------------------------------------------------
-
       - task: PowerShell@2
         displayName: 'Execute Tosca Cloud Playlist and Retrieve Results'
         env:
@@ -102,13 +88,26 @@ stages:
             -JUnitResultsFile "$(toscaResultsFile)"
 
       # -------------------------------------------------------------------
+      # Copy the <failure> message attribute into the element body so the
+      # Tests tab (Debug > Error message) shows it. Must run BEFORE
+      # PublishTestResults, which reads the file.
+      # -------------------------------------------------------------------
+      - powershell: |
+          $f = "$(toscaResultsFile)"
+          if (Test-Path $f) {
+            [xml]$x = Get-Content $f
+            foreach ($fl in $x.SelectNodes('//failure')) {
+              if (-not $fl.InnerText) { $fl.InnerText = $fl.GetAttribute('message') }
+            }
+            $x.Save($f)
+          }
+        displayName: 'Add failure text to JUnit'
+        condition: always()
+
+      # -------------------------------------------------------------------
       # Publish results to the run's Tests tab.
-      # Points directly at the file the execution script wrote. The script
-      # already re-serializes JUnit to consistent UTF-8 via XmlWriter, so the
-      # old separate "Convert JUnit results to UTF-8" step is no longer needed.
       # always() so failures are still published (that's when you need them).
       # -------------------------------------------------------------------
-
       - task: PublishTestResults@2
         displayName: 'Publish Test Results'
         condition: always()
@@ -118,13 +117,9 @@ stages:
 
       # -------------------------------------------------------------------
       # Enrich failed tests with step-level HTML and attach to results.
-      # Re-derives the run id, pulls each failed test case's step JSON, renders one HTML report per failure, writes a Markdown summary tab,
-      # and attaches each report to the matching failed result in the Tests tab.
-      # Runs on failure too (condition: always) - that's when it matters.
-      # SYSTEM_ACCESSTOKEN is required to attach files to test results (the build service identity also needs Manage/Publish test results).
-      # Client secret comes from env, same as the execution task.
+      # SYSTEM_ACCESSTOKEN is required to attach files to test results (the
+      # build service identity also needs permission to manage test runs).
       # -------------------------------------------------------------------
-
       - task: PowerShell@2
         displayName: 'Attach step-level detail to failed tests'
         condition: always()
@@ -146,13 +141,13 @@ stages:
 
       # -------------------------------------------------------------------
       # Publish the rendered reports as a downloadable pipeline artifact.
-      # This is the safety net: even if a per-result attachment can't match a name or the OAuth token is missing,
-      # every HTML report is still here under the "ToscaStepReports" artifact. always() so it runs on failure.
+      # continueOnError so a missing folder (e.g. no failures) is a warning,
+      # not a failure that hides the real error.
       # -------------------------------------------------------------------
-
       - task: PublishPipelineArtifact@1
         displayName: 'Publish step-detail reports'
         condition: always()
+        continueOnError: true
         inputs:
           targetPath: '$(Build.ArtifactStagingDirectory)\ToscaStepReports'
           artifact: 'ToscaStepReports'
