@@ -1,6 +1,6 @@
 #Requires -Version 3.0
 <#
-    Publish-ToscaStepDetails.ps1  (v4 - public Playlists API v2 only)
+    Publish-ToscaStepDetails.ps1  (v5 - public Playlists API v2 only)
     ----------------------------------------------------------------------------
     Runs AFTER your existing execution-client + PublishTestResults@2 steps.
     Does NOT depend on internals of tosca_cloud_execution_client.ps1.
@@ -34,6 +34,14 @@
         accepts fileExtension with or without a leading dot; caps, download
         and best-effort handling are unchanged.
       * Every Tosca call now goes through the public Playlists API v2.
+
+    v5 changes vs v4:
+      * The failing leaf step(s) of each failed test are extracted from the step
+        JSON and written to the Azure DevOps test result's errorMessage and
+        stackTrace fields (PATCH .../test/Runs/{runId}/results), so the Tests tab
+        Debug > Error message / Stack trace panels are populated. Needed because
+        the JUnit file returned by Tosca Cloud carries an empty failure message.
+        Best-effort: a failed PATCH only logs a warning.
 
     Best-effort: always exits 0 so it can never flip your job's pass/fail.
 #>
@@ -409,6 +417,31 @@ function Escape-Md { param($s)
     return ([string]$s).Replace('|','\|').Replace("`r"," ").Replace("`n"," ")
 }
 
+# --------------------------------------------------------------------------
+# Error message / stack trace for the Tests tab Debug panels (v5)
+# --------------------------------------------------------------------------
+function Get-FailedLeafSteps {
+    # Walks the step tree and collects the deepest failed steps (the real cause).
+    param($Step, [string]$Path, $Acc)
+    $here = if ($Path) { "$Path > $($Step.name)" } else { "$($Step.name)" }
+    $kids = @($Step.innerSteps | Where-Object { $_ })
+    if ($kids.Count -eq 0) {
+        if ("$($Step.state)".ToLower() -eq 'failed') {
+            [void]$Acc.Add([pscustomobject]@{ Path=$here; Name="$($Step.name)"; Mode="$($Step.actionMode)"; Message="$($Step.message)" })
+        }
+    } else {
+        foreach ($k in $kids) { Get-FailedLeafSteps -Step $k -Path $here -Acc $Acc }
+    }
+}
+
+function Set-AdoResultError {
+    # Fills the Debug tab (Error message + Stack trace) of a test result.
+    param([string]$Collection,[string]$Project,[string]$AdoToken,[string]$RunId,[string]$ResultId,[string]$ErrorMessage,[string]$StackTrace)
+    $h = @{ 'Authorization'="Bearer $AdoToken"; 'Content-Type'='application/json' }
+    $payload = ConvertTo-Json -InputObject @(@{ id=[int]$ResultId; errorMessage=$ErrorMessage; stackTrace=$StackTrace }) -Depth 5
+    Invoke-RestMethod -Uri "$Collection$Project/_apis/test/Runs/$RunId/results?api-version=7.1" -Method Patch -Headers $h -Body $payload | Out-Null
+}
+
 # ==========================================================================
 # MAIN  (best-effort: always exits 0)
 # ==========================================================================
@@ -426,6 +459,7 @@ try {
     if (-not $failedRuns -or $failedRuns.Count -eq 0) { Write-Info "No failed test case runs - nothing to enrich."; exit 0 }
 
     $nameToHtml = @{}; $nameToShots = @{}; $reportIndex = @()
+    $nameToError = @{}
     foreach ($tcr in $failedRuns) {
         $safe = if ($tcr.displayName) { $tcr.displayName } else { $tcr.testCaseId }
         $safe = ($safe -replace '[^\w\-]+','_').Trim('_'); if (-not $safe) { $safe = $tcr.id }
@@ -443,6 +477,29 @@ try {
         (New-StepHtml -TestCaseRun $tcr -StepJson $json -BaseUrl $BaseUrl -WorkspaceName $WorkspaceName -PlaylistRunId $PlaylistRunId -Screenshots $shots) | Out-File -FilePath $file -Encoding UTF8
         Write-Info "Rendered $file"
         if ($tcr.displayName) { $nameToHtml[$tcr.displayName.ToLower()] = $file; $nameToShots[$tcr.displayName.ToLower()] = $shots }
+
+        # v5: build Error message + Stack trace text from the failing leaf step(s).
+        if ($tcr.displayName -and $json) {
+            $failedSteps = New-Object System.Collections.ArrayList
+            foreach ($root in @($json)) { Get-FailedLeafSteps -Step $root -Path "" -Acc $failedSteps }
+            if ($failedSteps.Count -gt 0) {
+                $msgLines = @(); $traceLines = @()
+                foreach ($fs in $failedSteps) {
+                    $line = "$($fs.Name)"
+                    if ($fs.Mode) { $line += " ($($fs.Mode))" }
+                    $v = Get-VerifyParts $fs.Message
+                    if ($v.Headline) { $line += ": $($v.Headline)" }
+                    if ($null -ne $v.Expected -or $null -ne $v.Actual) { $line += " [Expected: $($v.Expected) | Actual: $($v.Actual)]" }
+                    $msgLines   += $line
+                    $traceLines += $fs.Path
+                }
+                $nameToError[$tcr.displayName.ToLower()] = [pscustomobject]@{
+                    Message = ($msgLines -join "`n")
+                    Trace   = ($traceLines -join "`n")
+                }
+            }
+        }
+
         $resultUrl = if ($WorkspaceName) { "$BaseUrl/_portal/space/$([uri]::EscapeDataString($WorkspaceName))/runs/$PlaylistRunId/results/$($tcr.testCaseId)" } else { "" }
         $reportIndex += [pscustomobject]@{ Name=$tcr.displayName; State=$tcr.state; File=(Split-Path $file -Leaf); Url=$resultUrl }
     }
@@ -480,6 +537,16 @@ try {
                 if ($nameToHtml.ContainsKey($key)) {
                     try { Add-AdoAttachment -Collection $collection -Project $project -AdoToken $adoToken -RunId $res.RunId -ResultId $res.ResultId -FilePath $nameToHtml[$key] -FileName "ToscaStepDetail.html"; $attached++ }
                     catch { Write-Warn2 "Attach failed for '$($res.Title)': $($_.Exception.Message)" }
+
+                    # v5: populate Debug > Error message / Stack trace (best-effort)
+                    if ($nameToError.ContainsKey($key)) {
+                        try {
+                            Set-AdoResultError -Collection $collection -Project $project -AdoToken $adoToken -RunId $res.RunId -ResultId $res.ResultId `
+                                -ErrorMessage $nameToError[$key].Message -StackTrace $nameToError[$key].Trace
+                            Write-Info "Set error message for '$($res.Title)'."
+                        } catch { Write-Warn2 "Set error message failed for '$($res.Title)': $($_.Exception.Message)" }
+                    }
+
                     # Screenshots for this result (best-effort, one attachment each)
                     if ($nameToShots.ContainsKey($key)) {
                         foreach ($s in @($nameToShots[$key])) {
