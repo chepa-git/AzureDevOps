@@ -40,7 +40,7 @@ stages:
             -WorkspaceId "$(ToscaWorkspaceID)"
             -Scope "tta"
             -PlaylistName "$(toscaPlaylistName)"
-            -ParameterOverride "Browser=Chrome"
+           
             -StartNewRun
             -MonitorRun
             -PollingInterval 10
