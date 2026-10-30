@@ -40,7 +40,6 @@ stages:
             -WorkspaceId "$(ToscaWorkspaceID)"
             -Scope "tta"
             -PlaylistName "$(toscaPlaylistName)"
-           
             -StartNewRun
             -MonitorRun
             -PollingInterval 10
