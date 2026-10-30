@@ -31,7 +31,7 @@ trigger:
 # ----------------------------------------------------------------------------
 variables:
   - name: toscaPlaylistName
-    value: Regression - Web To Lead - End to End
+    value: Adhoc Regression
   # Per-build results path. Agent.TempDirectory is wiped at the start of each
   # job, so a failed run can't republish a previous build's results.xml and
   # concurrent builds on this agent won't collide. Expanded at job runtime.
